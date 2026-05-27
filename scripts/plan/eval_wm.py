@@ -31,7 +31,7 @@ def img_transform(cfg, dtype=torch.float32):
 
 def get_episodes_length(dataset, episodes):
     col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
+        'ep_idx' if 'ep_idx' in dataset.column_names else 'episode_idx'
     )
 
     episode_idx = dataset.get_col_data(col_name)
@@ -73,7 +73,7 @@ def run(cfg: DictConfig):
     dataset = get_dataset(cfg, cfg.eval.dataset_name)
     stats_dataset = dataset  # get_dataset(cfg, cfg.dataset.stats)
     col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
+        'ep_idx' if 'ep_idx' in dataset.column_names else 'episode_idx'
     )
     ep_indices, _ = np.unique(
         stats_dataset.get_col_data(col_name), return_index=True
@@ -138,7 +138,7 @@ def run(cfg: DictConfig):
     }
     # Map each dataset row’s episode_idx to its max_start_idx
     col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
+        'ep_idx' if 'ep_idx' in dataset.column_names else 'episode_idx'
     )
     max_start_per_row = np.array(
         [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
@@ -159,8 +159,10 @@ def run(cfg: DictConfig):
 
     print(random_episode_indices)
 
-    eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
-    eval_start_idx = dataset.get_row_data(random_episode_indices)['step_idx']
+    # index full index-columns directly: Lance omits index columns from
+    # get_row_data / column_names, but get_col_data exposes them on all formats.
+    eval_episodes = dataset.get_col_data(col_name)[random_episode_indices]
+    eval_start_idx = dataset.get_col_data('step_idx')[random_episode_indices]
 
     if len(eval_episodes) < cfg.eval.num_eval:
         raise ValueError(
