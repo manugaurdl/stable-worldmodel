@@ -22,7 +22,7 @@ evaluating them with MPC on PushT — is ours and is documented under `research/
      directory name under `$STABLEWM_HOME/checkpoints/` (e.g. `quentinll/lewm-pusht`,
      `pusht_dinov2_small_psmall`), always paired with a checkpoint epoch
      (`@weights_epoch_10`). *Future* models: the **wandb run ID** in project `stable-wm`
-     (training currently does **not** log there — see trap #1).
+     (= `subdir`; wandb logs there as of 2026-05-29 — see trap #1).
    - **Eval ID** — one named evaluation type, pinning the exact command. Defined in
      [`research/reference.md`](research/reference.md) (`pusht-wm-cem`, `pusht-ff`).
 
@@ -61,14 +61,18 @@ Run this every time, before writing a number anywhere:
 Append here whenever a bug corrupts a number or a structural quirk wastes time. Record
 the wrong value, the correct value, the root cause (`file:line`), and the fix.
 
-- **Trap #1 — wandb is silent (disabled by default).** The wandb block is injected from
-  `scripts/train/config/launcher/local.yaml` with **`wandb.enabled: false`**, so **zero
-  runs were ever logged** — project `stable-wm` does not exist on `manugaur`. The default
-  `entity` there is also a placeholder (`stable-wm`, not `manugaur`). Do not assume a
-  model has a wandb run ID. To enable: `wandb.enabled=true wandb.config.entity=manugaur`.
-  Since `id: ${subdir}`, the wandb run ID then equals the `subdir` (= run dir name), so
-  future model IDs align with legacy dir-name IDs. Until then, legacy model IDs =
-  checkpoint dir names. (Verify with `wandb.Api().runs("manugaur/stable-wm")`.)
+- **Trap #1 — wandb (now ON by default; was silent before 2026-05-29).** The wandb block
+  is injected from `scripts/train/config/launcher/local.yaml`. It now defaults to
+  **`wandb.enabled: true`, `entity: manugaur`, `project: stable-wm`** — previously
+  `enabled: false` with a placeholder `entity: stable-wm`, so **every run before
+  2026-05-29 logged nothing** (legacy model IDs = checkpoint dir names, no wandb run).
+  Since `id: ${subdir}`, the wandb run ID equals `subdir` (= run dir name) — **so you must
+  pass `subdir=<name>`** or the run ID is empty and checkpoints land in the `checkpoints/`
+  root. New runs (prejepa) thus have a wandb run ID aligned with the dir-name convention.
+  Disable for throwaway runs with `wandb.enabled=false`. (Verify with
+  `wandb.Api().runs("manugaur/stable-wm")`.) Metrics logged by `prejepa.py`:
+  `train/mse` + per-modality `train/*_loss` (per step), `val/mse` (per epoch, the proxy we
+  watch vs MPC), `train/grad_norm`, `perf/{samples_per_sec,step_time_s}`, and lr.
 
 - **Trap #2 — config and weights live in DIFFERENT dirs.** In `scripts/train/*.py`,
   `subdir` sets the run dir (gets the full `config.yaml`) while `output_model_name` sets
