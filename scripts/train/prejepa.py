@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import hydra
@@ -80,6 +81,29 @@ class SaveCkptCallback(Callback):
         )
 
 
+class ThroughputCallback(Callback):
+    """Log training throughput as ``perf/samples_per_sec``."""
+
+    def __init__(self, batch_size):
+        super().__init__()
+        self.batch_size = batch_size
+        self._t0 = None
+
+    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+        self._t0 = time.perf_counter()
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if self._t0 is None:
+            return
+        dt = time.perf_counter() - self._t0
+        if dt <= 0:
+            return
+        samples = self.batch_size * trainer.world_size
+        pl_module.log(
+            'perf/samples_per_sec', samples / dt, on_step=True, on_epoch=False
+        )
+
+
 # ---------------------------------------------------------------------------
 # Forward
 # ---------------------------------------------------------------------------
@@ -145,12 +169,49 @@ def dinowm_forward(self, batch, stage, cfg):
     if batch['loss'].isnan():
         raise ValueError('NaN loss encountered!')
 
+    # 'fit' -> 'train', 'validate' -> 'val' for clean wandb panels
+    prefix = {'fit': 'train', 'validate': 'val'}.get(stage, stage)
+    is_train = stage == 'fit'
+
+    # Headline metric: total latent-prediction MSE (the optimization target).
+    # train -> per-step; val -> epoch-aggregated (the proxy we watch vs MPC).
+    self.log(
+        f'{prefix}/mse',
+        batch['loss'].detach(),
+        on_step=is_train,
+        on_epoch=not is_train,
+        prog_bar=True,
+        sync_dist=True,
+    )
+    # Per-modality MSE components (pixels_loss, proprio_loss, ...).
     self.log_dict(
-        {f'{stage}/{k}': v.detach() for k, v in batch.items() if '_loss' in k},
-        on_step=True,
+        {f'{prefix}/{k}': v.detach() for k, v in batch.items() if '_loss' in k},
+        on_step=is_train,
+        on_epoch=not is_train,
         sync_dist=True,
     )
     return batch
+
+
+class DinoWMModule(spt.Module):
+    """``spt.Module`` that logs the true pre-clip gradient norm as ``train/grad_norm``.
+
+    ``after_manual_backward`` fires right after backward and *before* spt clips
+    gradients inside ``training_step``, so it sees the real gradient. Under AMP
+    the grads are still loss-scaled here, so we divide by the ``GradScaler``
+    scale to recover the true norm — without this, spt clips the still-scaled
+    grads and the post-clip value is pinned at ``1/scale`` (meaningless).
+    ``clip_grad_norm_`` with ``max_norm=inf`` only measures; it does not alter
+    the grads, so spt's subsequent real clip is unaffected.
+    """
+
+    def after_manual_backward(self):
+        scaler = getattr(self.trainer.precision_plugin, 'scaler', None)
+        scale = scaler.get_scale() if scaler is not None else 1.0
+        norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=float('inf')
+        )
+        self.log('train/grad_norm', norm / scale, on_step=True, on_epoch=False)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +328,7 @@ def run(cfg):
 
     world_model = hydra.utils.instantiate(cfg.model, encoder=encoder)
 
-    world_model = spt.Module(
+    world_model = DinoWMModule(
         model=world_model,
         forward=partial(dinowm_forward, cfg=cfg),
         optim={
@@ -287,26 +348,33 @@ def run(cfg):
         OmegaConf.save(cfg, f)
 
     logger = None
+    model_name = cfg.output_model_name
     if cfg.wandb.enabled:
         logger = WandbLogger(**cfg.wandb.config)
         logger.log_hyperparams(OmegaConf.to_container(cfg))
+        # Tie the checkpoint dir to the wandb run ID (our model-ID convention):
+        # `version` is the resolved run id (= `subdir` if set, else wandb's auto id).
+        if logger.version:
+            model_name = f'{cfg.output_model_name}_{logger.version}'
+    logging.info(f'Checkpoint model name: {model_name}')
 
     trainer = pl.Trainer(
         **cfg.trainer,
         callbacks=[
             SaveCkptCallback(
-                run_name=cfg.output_model_name,
+                run_name=model_name,
                 cfg=cfg.model,
                 epoch_interval=5,
             ),
             pl.pytorch.callbacks.LearningRateMonitor(logging_interval='step'),
+            ThroughputCallback(batch_size=cfg.batch_size),
         ],
         num_sanity_val_steps=1,
         logger=logger,
         enable_checkpointing=True,
     )
 
-    ckpt_path = run_dir / f'{cfg.output_model_name}_weights.ckpt'
+    ckpt_path = run_dir / f'{model_name}_weights.ckpt'
     manager = spt.Manager(
         trainer=trainer,
         module=world_model,
