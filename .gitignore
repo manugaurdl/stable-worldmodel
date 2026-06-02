@@ -218,7 +218,11 @@ outputs/
 multirun/
 checkpoints/
 dino_wm_ckpt/
-dino_wm/
+# dino_wm/ is vendored into this repo (de-nested from gaoyuezhou/dino_wm).
+# Its own dino_wm/.gitignore scopes its junk (__pycache__, *.pyc, outputs,
+# plan_outputs); re-include any `env/` dir under dino_wm (e.g. dino_wm/env/,
+# dino_wm/conf/env/) which the global `env/` rule above would otherwise exclude.
+!dino_wm/**/env/
 pusht_noise/
 results/
 wandb/
