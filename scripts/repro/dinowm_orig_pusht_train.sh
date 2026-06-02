@@ -16,7 +16,7 @@ set -euo pipefail
 
 DINO=/home/manu/stable-worldmodel/dino_wm
 BIN=/nas/manu/miniconda3/envs/dino_wm/bin
-RUN=/nas/manu/stable_worldmodel/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3
+RUN=${RUN:-/nas/manu/stable_worldmodel/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3}
 
 NGPU=${NGPU:-8}
 GPUS=${GPUS:-0,1,2,3,4,5,6,7}
