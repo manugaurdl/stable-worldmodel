@@ -93,6 +93,34 @@ python scripts/plan/eval_wm.py policy=<model-id> eval.dataset_name=pusht_expert_
 **Variants:** add `eval.dataset_name=pusht_expert_train.lance` for Lance; `bf16=true`,
 `compile=true` for speed. Each variant is a *different* result — note it.
 
+### `pusht-dinowm-plan` — DINO-WM's *native* planning eval (for `dinowm_orig_*` models)
+
+The **original** DINO-WM repo's own evaluator: `dino_wm/plan.py` + `dino_wm/conf/plan_pusht.yaml`.
+Used only for models trained with the original code (e.g. `dinowm_orig_pusht_f5h3`), which
+are not `load_pretrained`-compatible. Runs in the `dino_wm` conda env (py3.10), not the swm venv.
+
+```bash
+export DATASET_DIR=/nas/manu/stable_worldmodel/datasets SDL_VIDEODRIVER=dummy MUJOCO_GL=egl WANDB_MODE=disabled
+cd dino_wm && CUDA_VISIBLE_DEVICES=<gpu> python plan.py --config-name plan_pusht.yaml \
+    ckpt_base_path=/nas/manu/stable_worldmodel/dino_wm_runs \
+    model_name=dinowm_orig_pusht_f5h3 model_epoch=<N> n_evals=50 n_plot_samples=0
+# wrapper: scripts/repro/dinowm_orig_pusht_plan_eval.sh   (EPOCH=<N> NEVALS=50 GPU=<g>)
+```
+
+**Pinned defaults** (`plan_pusht.yaml`): `seed=99`, `n_evals=50`, MPC-CEM
+(`num_samples=300`, `opt_steps=30`, `topk=30`, `horizon=5`, `n_taken_actions=5`,
+`max_iter=null`), `goal_source='dset'`, `goal_H=5`. `n_plot_samples=0` (no decoder viz;
+we train `has_decoder=False`).
+
+**Goal/success:** goal = a val-trajectory state `goal_H*frameskip = 25` env-steps ahead;
+success = block pos `<20 px` **and** angle `<π/9` at the final step (`env.eval_state`).
+**Output:** `mpc/success_rate` in `dino_wm/plan_outputs/<ts>_dinowm_orig_pusht_f5h3_gH5/logs.json`.
+
+> **Not the same as `pusht-wm-cem`.** Same CEM knobs and 25-step goal distance, but a
+> *different evaluator + sim + seed* (99 vs 42) and DINO-WM's own `eval_state`. This is the
+> protocol behind DINO-WM's published ~0.92. Cross-eval under `pusht-wm-cem` is a *separate*
+> result (requires porting the checkpoint into a swm `PreJEPA` — see `models.md`).
+
 ### `pusht-ff` — feed-forward / BC policy eval
 
 `scripts/plan/eval_ff.py`. For policies that emit actions directly (`AutoActionableModel`
