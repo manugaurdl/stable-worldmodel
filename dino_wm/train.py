@@ -121,7 +121,7 @@ class Trainer:
             self.wandb_run.define_metric("val/*", step_metric="epoch")
             self.wandb_run.define_metric("train/img_*", step_metric="epoch")
             self.wandb_run.define_metric("train/z_*", step_metric="epoch")
-            self.wandb_run.define_metric("perf/train_epoch_time_s", step_metric="epoch")
+            self.wandb_run.define_metric("perf/epoch_*", step_metric="epoch")
             with open(os.path.join(os.getcwd(), "hydra.yaml"), "w") as f:
                 f.write(OmegaConf.to_yaml(cfg, resolve=True))
 
@@ -137,13 +137,23 @@ class Trainer:
         self.train_traj_dset = traj_dsets["train"]
         self.val_traj_dset = traj_dsets["valid"]
 
+        loader_kwargs = dict(
+            batch_size=self.cfg.gpu_batch_size,
+            shuffle=False,  # already shuffled in TrajSlicerDataset
+            num_workers=self.cfg.env.num_workers,
+            collate_fn=None,
+            pin_memory=True,  # faster host->device copy
+        )
+        if self.cfg.env.num_workers > 0:
+            # keep workers alive across epochs + deepen the prefetch buffer so the
+            # GPU never waits on the (RAM-resident) feature reads.
+            loader_kwargs["persistent_workers"] = True
+            loader_kwargs["prefetch_factor"] = 4
         self.dataloaders = {
             x: torch.utils.data.DataLoader(
                 self.datasets[x],
-                batch_size=self.cfg.gpu_batch_size,
-                shuffle=False, # already shuffled in TrajSlicerDataset
-                num_workers=self.cfg.env.num_workers,
-                collate_fn=None,
+                drop_last=(x == "train"),  # avoid a ragged final batch under DDP
+                **loader_kwargs,
             )
             for x in ["train", "valid"]
         }
@@ -386,10 +396,15 @@ class Trainer:
         init_epoch = self.epoch + 1  # epoch starts from 1
         for epoch in range(init_epoch, init_epoch + self.total_epochs):
             self.epoch = epoch
+            epoch_wall_t0 = time.perf_counter()
             self.accelerator.wait_for_everyone()
             self.train()
             self.accelerator.wait_for_everyone()
             self.val()
+            # full epoch wall-clock (train + val), in minutes — the budgeting metric
+            self.logs_update(
+                {"perf/epoch_time_min": [(time.perf_counter() - epoch_wall_t0) / 60.0]}
+            )
             self.logs_flash(step=self.epoch)
             if self.epoch % self.cfg.training.save_every_x_epoch == 0:
                 ckpt_path, model_name, model_epoch = self.save_ckpt()
@@ -457,11 +472,13 @@ class Trainer:
     def train(self):
         epoch_t0 = time.perf_counter()
         run_loss_sum, run_loss_n = 0.0, 0  # epoch-mean train loss for the console line
+        num_samples = 0  # this-rank samples processed this epoch, for throughput
         for i, data in enumerate(
             tqdm(self.dataloaders["train"], desc=f"Epoch {self.epoch} Train")
         ):
             step_t0 = time.perf_counter()
             obs, act, state = data
+            num_samples += obs["visual"].shape[0]
             self.global_step += 1
             plot = i == 0  # only plot from the first batch
             self.model.train()
@@ -589,10 +606,15 @@ class Trainer:
                     phase="train",
                 )
 
-        # train scalars (loss, grad_norm, lr, throughput) are logged per-step above;
-        # only the per-epoch wall-clock is aggregated here (plotted vs `epoch`).
+        # per-epoch training throughput + train-loop wall-clock (epoch-axis perf).
+        # samples_per_sec is GLOBAL (x num_processes), so it rises with GPUs + batch.
+        train_time = time.perf_counter() - epoch_t0
+        global_samples = num_samples * self.accelerator.num_processes
         self.logs_update(
-            {"perf/train_epoch_time_s": [time.perf_counter() - epoch_t0]}
+            {
+                "perf/epoch_train_time_min": [train_time / 60.0],
+                "perf/epoch_samples_per_sec": [global_samples / max(train_time, 1e-8)],
+            }
         )
         self.epoch_train_loss = run_loss_sum / max(run_loss_n, 1)
 
@@ -800,8 +822,12 @@ class Trainer:
             epoch_log[key] = to_log
         epoch_log["epoch"] = step
         train_loss = getattr(self, "epoch_train_loss", float("nan"))
-        log.info(f"Epoch {self.epoch}  Training loss: {train_loss:.4f}  \
-                Validation loss: {epoch_log['val/loss']:.4f}")
+        log.info(
+            f"Epoch {self.epoch}  train_loss: {train_loss:.4f}  "
+            f"val_loss: {epoch_log['val/loss']:.4f}  |  "
+            f"{epoch_log.get('perf/epoch_time_min', float('nan')):.1f} min/epoch  "
+            f"{epoch_log.get('perf/epoch_samples_per_sec', float('nan')):.0f} samples/s"
+        )
 
         if self.accelerator.is_main_process:
             self.wandb_run.log(epoch_log)
@@ -877,6 +903,10 @@ class Trainer:
 
 @hydra.main(config_path="conf", config_name="train")
 def main(cfg: OmegaConf):
+    # TF32 matmuls: big speedup on Ampere/Ada with ~fp32 accuracy. Much smaller
+    # numerical drift than bf16, so safe to leave on for the fp32 recipe.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     trainer = Trainer(cfg)
     trainer.run()
 
