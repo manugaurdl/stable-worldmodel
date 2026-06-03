@@ -47,6 +47,11 @@ concat_dim: 1
 
 normalize_action: True
 
+# repro patch D12: online (False) vs precomputed (True) frozen-DINOv2 features.
+# Frozen encoder => identical model; precomp is a throughput optimization only.
+# Precomp requires prebuilt {split}/feats/*.npy (see dinowm_orig_pusht_dataprep.sh).
+precomp_feat: False
+
 # action encoder
 action_emb_dim: 10
 num_action_repeat: 1

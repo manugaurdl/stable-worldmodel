@@ -8,11 +8,13 @@
 # has_decoder=False  -> predictor-only = the paper's headline (0.92 "w/o decoder loss")
 #   config; the decoder loss uses DETACHED latents so it never affects the predictor, and
 #   it would OOM val on a 49GB GPU. Also matches the in-house PreJEPA config (fair compare).
-# Uses precomputed frozen DINOv2 features (see dinowm_orig_pusht_dataprep.sh) via
-#   env.dataset._target_=...load_pusht_feat_slice_train_val  (model patch D10 + dataset D11).
-#   Mathematically identical to on-the-fly encoding (frozen encoder).
+# Feature mode is toggled by PRECOMP (patch D12): PRECOMP=1 (default) reads precomputed
+#   frozen DINOv2 features (see dinowm_orig_pusht_dataprep.sh); PRECOMP=0 encodes online
+#   (decode mp4 + DINOv2 forward every batch). Frozen encoder => the two are mathematically
+#   identical; precomp is a throughput optimization only.
 #
-# Prereq: run dinowm_orig_pusht_dataprep.sh first (features in /dev/shm).
+# Prereq (PRECOMP=1 only): run dinowm_orig_pusht_dataprep.sh first (features in /dev/shm;
+#   /dev/shm is tmpfs, so re-run after a reboot). PRECOMP=0 needs no prep.
 set -euo pipefail
 
 # --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
@@ -36,6 +38,8 @@ ACCELERATE="$(dirname "$DINOENV")/accelerate"
 # (train.py reuses that dir's hydra.yaml wandb_run_id + checkpoints/model_latest.pth.)
 RUN=${RUN:-$STABLEWM_HOME/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3_$(date +%Y%m%d_%H%M%S)}
 EPOCHS=${EPOCHS:-100}
+PRECOMP=${PRECOMP:-1}   # 1 -> precomputed feats; 0 -> encode DINOv2 online
+[ "$PRECOMP" = "0" ] && PRECOMP_FEAT=False || PRECOMP_FEAT=True
 
 export DATASET_DIR="$STABLEWM_HOME/datasets"
 cd "$DINO"
@@ -44,6 +48,6 @@ CUDA_VISIBLE_DEVICES=$GPUS "$ACCELERATE" launch --multi_gpu --num_processes "$NG
   --config-name train.yaml env=pusht frameskip=5 num_hist=3 num_pred=1 \
   has_decoder=False model.train_decoder=False training.batch_size=64 training.epochs="$EPOCHS" \
   env.num_workers=8 \
-  env.dataset._target_=datasets.pusht_dset.load_pusht_feat_slice_train_val \
+  precomp_feat="$PRECOMP_FEAT" \
   hydra.run.dir="$RUN"
 # checkpoints -> $RUN/checkpoints/model_{epoch}.pth (+ model_latest.pth); train cfg -> $RUN/hydra.yaml

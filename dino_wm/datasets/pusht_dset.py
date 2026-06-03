@@ -149,15 +149,22 @@ def load_pusht_slice_train_val(
     num_pred=0,
     frameskip=0,
     with_velocity=True,
+    precomp_feat=False,
 ):
-    train_dset = PushTDataset(
+    # repro patch D12: precomp_feat toggles online vs precomputed DINOv2 features.
+    #   False -> PushTDataset: decode mp4 + run frozen DINOv2 every batch (original).
+    #   True  -> PushTFeatDataset: read precomputed patch feats from {split}/feats/*.npy.
+    # The encoder is frozen (train_encoder=False), so the two paths are mathematically
+    # identical; precomp is purely a throughput optimization. See PushTFeatDataset.
+    dset_cls = PushTFeatDataset if precomp_feat else PushTDataset
+    train_dset = dset_cls(
         n_rollout=n_rollout,
         transform=transform,
         data_path=data_path + "/train",
         normalize_action=normalize_action,
         with_velocity=with_velocity,
     )
-    val_dset = PushTDataset(
+    val_dset = dset_cls(
         n_rollout=n_rollout,
         transform=transform,
         data_path=data_path + "/val",
@@ -197,27 +204,9 @@ class PushTFeatDataset(PushTDataset):
         return obs, act, state, {"shape": shape}
 
 
-def load_pusht_feat_slice_train_val(
-    transform,
-    n_rollout=50,
-    data_path="data/pusht_dataset",
-    normalize_action=True,
-    split_ratio=0.8,
-    num_hist=0,
-    num_pred=0,
-    frameskip=0,
-    with_velocity=True,
-):
-    train_dset = PushTFeatDataset(
-        n_rollout=n_rollout, transform=transform, data_path=data_path + "/train",
-        normalize_action=normalize_action, with_velocity=with_velocity,
-    )
-    val_dset = PushTFeatDataset(
-        n_rollout=n_rollout, transform=transform, data_path=data_path + "/val",
-        normalize_action=normalize_action, with_velocity=with_velocity,
-    )
-    num_frames = num_hist + num_pred
-    train_slices = TrajSlicerDataset(train_dset, num_frames, frameskip)
-    val_slices = TrajSlicerDataset(val_dset, num_frames, frameskip)
-    return ({"train": train_slices, "valid": val_slices},
-            {"train": train_dset, "valid": val_dset})
+def load_pusht_feat_slice_train_val(**kwargs):
+    # repro patch D12: kept for back-compat (older repro scripts pass this _target_).
+    # Equivalent to load_pusht_slice_train_val(..., precomp_feat=True). New code should
+    # use the unified loader + precomp_feat flag instead of this entry point.
+    kwargs["precomp_feat"] = True
+    return load_pusht_slice_train_val(**kwargs)

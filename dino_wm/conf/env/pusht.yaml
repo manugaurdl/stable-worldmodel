@@ -10,6 +10,7 @@ dataset:
   n_rollout: null
   normalize_action: ${normalize_action}
   data_path: ${oc.env:DATASET_DIR}/pusht_noise
+  precomp_feat: ${precomp_feat}
   split_ratio: 0.9
   transform:
     _target_: "datasets.img_transforms.default_transform"
