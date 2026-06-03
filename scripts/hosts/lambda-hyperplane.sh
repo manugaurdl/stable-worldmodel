@@ -23,3 +23,10 @@ export PY="$DINOENV"                                                     # place
 
 export NGPU="${NGPU:-4}"
 export GPUS="${GPUS:-0,1,2,3}"
+
+# DINO-WM precomputed feats: NOT /dev/shm here. This box's 504G /dev/shm is mostly taken by
+# a neighbor's 200G file, and the DataLoader needs /dev/shm for batch IPC -- co-locating the
+# ~295G train feats there OOMs it ("Bus error", trap #10). Use the fast LOCAL nvme disk
+# (/data, ext4); page cache keeps it RAM-hot and it survives reboots. (/data_new is NFS at
+# 98% full -- ~1 file/sec for 16816 small files, unusable.)
+export SWM_FEATS_ROOT="${SWM_FEATS_ROOT:-/data/manu/stable_worldmodel/datasets/diskfeats}"

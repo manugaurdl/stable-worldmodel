@@ -139,6 +139,22 @@ the wrong value, the correct value, the root cause (`file:line`), and the fix.
   written. Fixed to `wait "$pid"` per shard (fail loud) + assert final counts
   (`16816`/`1869`). If you copy this fan-out pattern elsewhere, wait per-PID.
 
+- **Trap #10 — DINO-WM feats in `/dev/shm` collide with the DataLoader (Bus error).** The
+  precompute caches ~295 GB of train feats in tmpfs (`/dev/shm/pusht_feats`) for RAM-speed
+  reads, but PyTorch's DataLoader also passes prefetched batches **through `/dev/shm`**
+  (both `file_descriptor` and `file_system` sharing strategies do — switching strategy does
+  NOT help). On a box where `/dev/shm` is small or shared (e.g. **lambda-hyperplane**: 504 GB
+  tmpfs with a neighbor's 200 GB file already in it), 295 GB of feats leaves no room and the
+  workers die: `DataLoader worker killed by signal: Bus error … out of shared memory`,
+  surfacing as a `ChildFailedError` with exit 1. Worse at high `batch*num_workers`
+  (`train.py:151` uses `prefetch_factor=4`). **Fix:** move feats off `/dev/shm` to a fast
+  **local** disk via `SWM_FEATS_ROOT` in `scripts/hosts/<host>.sh` (page cache keeps them
+  RAM-hot; also reboot-persistent). On lambda-hyperplane that's `/data` (local nvme ext4).
+  **Do NOT use NFS** for this: `/data_new` (98% full) moved/wrote 16816 small files at
+  ~1 file/sec (serial *and* 32-way parallel) — a 245 GB move would take hours; local `/data`
+  did 9000 files/min. (`dataprep.sh` step 2 reads `SWM_FEATS_ROOT`, default
+  `/dev/shm/pusht_feats`.)
+
 ---
 
 ## Conventions

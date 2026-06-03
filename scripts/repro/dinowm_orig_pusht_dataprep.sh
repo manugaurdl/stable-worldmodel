@@ -8,9 +8,10 @@
 #      running the (frozen) encoder every epoch. Features are mathematically identical to
 #      on-the-fly encode_obs (frozen encoder; verified maxdiff ~fp16 rounding).
 #
-# NOTE: features live in tmpfs (/dev/shm/pusht_feats, ~393 GB) and are VOLATILE — lost on
-# reboot or if /dev/shm is cleared. Re-run step 2 to regenerate (~10 min on 8 GPUs).
-# The split dirs' feats/ are symlinks into /dev/shm.
+# NOTE: feats default to tmpfs (/dev/shm/pusht_feats, ~393 GB) -- VOLATILE, lost on reboot
+# or if /dev/shm is cleared; re-run step 2 to regenerate (~10 min on 8 GPUs). Override the
+# location per host with SWM_FEATS_ROOT (see step 2); a local-disk root is persistent and
+# frees /dev/shm for the DataLoader. The split dirs' feats/ are symlinks into FEATS_ROOT.
 set -euo pipefail
 
 # --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
@@ -35,11 +36,18 @@ P="$STABLEWM_HOME/datasets/pusht_noise"
 # After this, PATCH dino_wm/datasets/pusht_dset.py:16-19 with the printed STATE/PROPRIO
 # stats (repro patch D3) and :110 -> :05d (D2). (Already applied in this checkout.)
 
-# --- 2. precompute DINOv2 features into /dev/shm ($NGPU GPUs; ~10 min, ~393 GB tmpfs) ---
+# --- 2. precompute DINOv2 features into $FEATS_ROOT ($NGPU GPUs; ~10 min, ~393 GB) ---
+# FEATS_ROOT defaults to /dev/shm/pusht_feats (tmpfs = RAM speed) for hosts with a big,
+# free /dev/shm. On a host whose /dev/shm is small or already occupied, point feats at a
+# fast LOCAL disk via SWM_FEATS_ROOT in scripts/hosts/<host>.sh -- the DataLoader also uses
+# /dev/shm for batch IPC, so co-locating 295GB of feats there OOMs it ("Bus error", trap
+# #10). The OS page cache keeps disk feats RAM-hot anyway. Avoid NFS (slow on 16816 small
+# files). Local disk also survives reboots, unlike tmpfs.
+FEATS_ROOT="${SWM_FEATS_ROOT:-/dev/shm/pusht_feats}"
 rm -rf "$P/train/feats" "$P/val/feats"
-mkdir -p /dev/shm/pusht_feats/train /dev/shm/pusht_feats/val
-ln -sfn /dev/shm/pusht_feats/train "$P/train/feats"
-ln -sfn /dev/shm/pusht_feats/val   "$P/val/feats"
+mkdir -p "$FEATS_ROOT/train" "$FEATS_ROOT/val"
+ln -sfn "$FEATS_ROOT/train" "$P/train/feats"
+ln -sfn "$FEATS_ROOT/val"   "$P/val/feats"
 IFS=',' read -ra _gpu <<< "$GPUS"            # CUDA_VISIBLE_DEVICES list from the host config
 for split in train val; do
   pids=()
@@ -53,7 +61,7 @@ for split in train val; do
     wait "$pid" || { echo "[dataprep] a $split precompute shard (pid $pid) failed -- aborting" >&2; exit 1; }
   done
 done
-ntr=$(ls /dev/shm/pusht_feats/train | wc -l); nva=$(ls /dev/shm/pusht_feats/val | wc -l)
+ntr=$(ls "$FEATS_ROOT/train" | wc -l); nva=$(ls "$FEATS_ROOT/val" | wc -l)
 echo "train feats: $ntr/16816  val: $nva/1869"
 [ "$ntr" -eq 16816 ] && [ "$nva" -eq 1869 ] || { echo "[dataprep] feature count mismatch (want 16816/1869) -- aborting" >&2; exit 1; }
 echo "[dataprep] OK"
