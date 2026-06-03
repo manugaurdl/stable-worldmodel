@@ -14,8 +14,12 @@
 #
 # PICK THE MACHINE (priority order):
 #   1. SWM_HOST=<name>  env var  ->  loads scripts/hosts/<name>.sh   (explicit; wins)
-#   2. $(hostname -s)            ->  convenience fallback
-#   e.g.   SWM_HOST=trinity-0-3 bash scripts/repro/dinowm_orig_pusht_train.sh
+#   2. ~/.swm_host  marker file  ->  one line naming this host       (per machine)
+#   3. $(hostname -s)            ->  convenience fallback            (e.g. trinity-0-3)
+# The marker exists because the two lambda boxes BOTH report `hostname -s` =
+# 'lambda-scalar'; a one-line ~/.swm_host names each one so a bare
+#   bash scripts/repro/dinowm_orig_pusht_train.sh
+# works anywhere. Set it once per box:  echo lambda-75 > ~/.swm_host
 #
 # Override any single var per-invocation by exporting it before sourcing, e.g.
 #   STABLEWM_HOME=/tmp/scratch GPUS=0,1 bash scripts/repro/<x>.sh
@@ -35,7 +39,12 @@
 SWM_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SWM_REPO_ROOT
 
-# Select host: explicit SWM_HOST wins, else short hostname.
+# Select host: explicit SWM_HOST wins, else the ~/.swm_host marker, else hostname.
+# The two lambda boxes share `hostname -s` = 'lambda-scalar', so drop a one-line
+# marker naming this machine once per box (trinity nodes resolve by hostname):
+#     echo lambda-75 > ~/.swm_host    # the /nas/manu box
+#     echo lambda-74 > ~/.swm_host    # the /data_new/manu box
+SWM_HOST="${SWM_HOST:-$(cat "$HOME/.swm_host" 2>/dev/null || true)}"
 SWM_HOST="${SWM_HOST:-$(hostname -s)}"
 export SWM_HOST
 
@@ -43,11 +52,13 @@ _swm_host_cfg="$SWM_REPO_ROOT/scripts/hosts/${SWM_HOST}.sh"
 if [[ ! -f "$_swm_host_cfg" ]]; then
   {
     echo "[env.sh] No host config for SWM_HOST='$SWM_HOST'."
+    echo "         set it via 'echo <name> > ~/.swm_host' (or SWM_HOST=<name>)."
     echo "         expected: scripts/hosts/${SWM_HOST}.sh"
     echo "         available hosts (pick one with SWM_HOST=<name>):"
     for _h in "$SWM_REPO_ROOT"/scripts/hosts/*.sh; do
       [[ -e "$_h" ]] && echo "           - $(basename "$_h" .sh)"
     done
+    echo "         on a NEW machine: add scripts/hosts/<name>.sh (see scripts/hosts/manu.sh)."
   } >&2
   return 1 2>/dev/null || exit 1
 fi

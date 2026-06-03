@@ -112,6 +112,12 @@ the wrong value, the correct value, the root cause (`file:line`), and the fix.
   home/nas/conda path **outside `scripts/hosts/`**, that's the bug — move it into the host
   config, don't paper over it with a one-off env override. `env.sh` fails loud if the
   cache root or interpreter is missing, so a wrong-host selection stops immediately.
+  Host selection priority is `SWM_HOST` env var → `~/.swm_host` marker file → `hostname
+  -s`. The marker exists because the **two lambda boxes both report `hostname -s` =
+  `lambda-scalar`** and differ only by data root: `lambda-75` (`/nas/manu`, = the `manu`
+  config) vs `lambda-74` (`/data_new/manu`). Drop a one-liner per box —
+  `echo lambda-75 > ~/.swm_host` — and a bare `bash scripts/repro/<x>.sh` resolves
+  correctly there.
 
 - **Trap #8 — DINO-WM's DINOv2 hub load is unpinned + the `dino_wm` conda env is Python
   3.9.** `dino_wm/models/dino.py` does `torch.hub.load("facebookresearch/dinov2", …)`
