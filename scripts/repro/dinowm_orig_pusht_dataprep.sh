@@ -13,25 +13,47 @@
 # The split dirs' feats/ are symlinks into /dev/shm.
 set -euo pipefail
 
-VENV=/home/manu/stable-worldmodel/.venv/bin/python          # has h5py/decord/imageio-ffmpeg
-DINOENV=/nas/manu/miniconda3/envs/dino_wm/bin/python        # has DINOv2/torch (py3.10)
-SCRIPTS=/home/manu/stable-worldmodel/scripts/data
-P=/nas/manu/stable_worldmodel/datasets/pusht_noise
+# --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
+# Run on a multi-GPU node:  SWM_HOST=trinity-0-3 bash scripts/repro/dinowm_orig_pusht_dataprep.sh
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/env.sh"
+
+# $PY (.venv) has h5py/decord/imageio-ffmpeg for the convert step; $DINOENV (conda)
+# has DINOv2/torch for the feature precompute.
+if [[ -z "${DINOENV:-}" ]]; then
+  echo "[dataprep] DINOENV not set for host '$SWM_HOST'. Need the dino_wm conda env" >&2
+  echo "           (DINOv2 + torch); set DINOENV in scripts/hosts/${SWM_HOST}.sh." >&2
+  echo "           See scripts/hosts/manu.sh for the original env." >&2
+  exit 1
+fi
+
+SCRIPTS="$SWM_REPO_ROOT/scripts/data"
+P="$STABLEWM_HOME/datasets/pusht_noise"
 
 # --- 1. convert h5 -> pusht_noise/{train,val} (one-time; ~5 min, ~7.6 GB) ---
-$VENV $SCRIPTS/convert_pusht_h5_to_dinowm.py --dst "$P" --workers 8
+"$PY" "$SCRIPTS/convert_pusht_h5_to_dinowm.py" --dst "$P" --workers 8
 # After this, PATCH dino_wm/datasets/pusht_dset.py:16-19 with the printed STATE/PROPRIO
 # stats (repro patch D3) and :110 -> :05d (D2). (Already applied in this checkout.)
 
-# --- 2. precompute DINOv2 features into /dev/shm (8 GPUs; ~10 min, ~393 GB tmpfs) ---
+# --- 2. precompute DINOv2 features into /dev/shm ($NGPU GPUs; ~10 min, ~393 GB tmpfs) ---
 rm -rf "$P/train/feats" "$P/val/feats"
 mkdir -p /dev/shm/pusht_feats/train /dev/shm/pusht_feats/val
 ln -sfn /dev/shm/pusht_feats/train "$P/train/feats"
 ln -sfn /dev/shm/pusht_feats/val   "$P/val/feats"
-for i in 0 1 2 3 4 5 6 7; do
-  CUDA_VISIBLE_DEVICES=$i $DINOENV $SCRIPTS/precompute_dino_feats.py --split train --num-shards 8 --shard $i &
-done; wait
-for i in 0 1 2 3 4 5 6 7; do
-  CUDA_VISIBLE_DEVICES=$i $DINOENV $SCRIPTS/precompute_dino_feats.py --split val --num-shards 8 --shard $i &
-done; wait
-echo "train feats: $(ls /dev/shm/pusht_feats/train | wc -l)/16816  val: $(ls /dev/shm/pusht_feats/val | wc -l)/1869"
+IFS=',' read -ra _gpu <<< "$GPUS"            # CUDA_VISIBLE_DEVICES list from the host config
+for split in train val; do
+  pids=()
+  for ((i=0; i<NGPU; i++)); do
+    CUDA_VISIBLE_DEVICES="${_gpu[$i]}" "$DINOENV" "$SCRIPTS/precompute_dino_feats.py" \
+      --split "$split" --num-shards "$NGPU" --shard "$i" &
+    pids+=($!)
+  done
+  # wait on each PID so a failed shard aborts (plain `wait` returns 0 and hid this before)
+  for pid in "${pids[@]}"; do
+    wait "$pid" || { echo "[dataprep] a $split precompute shard (pid $pid) failed -- aborting" >&2; exit 1; }
+  done
+done
+ntr=$(ls /dev/shm/pusht_feats/train | wc -l); nva=$(ls /dev/shm/pusht_feats/val | wc -l)
+echo "train feats: $ntr/16816  val: $nva/1869"
+[ "$ntr" -eq 16816 ] && [ "$nva" -eq 1869 ] || { echo "[dataprep] feature count mismatch (want 16816/1869) -- aborting" >&2; exit 1; }
+echo "[dataprep] OK"

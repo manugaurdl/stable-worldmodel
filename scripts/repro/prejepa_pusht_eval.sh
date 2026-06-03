@@ -6,24 +6,19 @@
 # Authoritative result lives in research/models.md / reproduction-log.md.
 set -euo pipefail
 
-# --- env (override STABLEWM_HOME / CUDA_VISIBLE_DEVICES if your host differs) ---
-export STABLEWM_HOME="${STABLEWM_HOME:-/nas/manu/stable_worldmodel}"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-export SDL_VIDEODRIVER=dummy
-export MUJOCO_GL=egl
-
-# --- repo root + venv ---
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+# --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
+# Override the machine with SWM_HOST=<name>; see scripts/env.sh.
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/env.sh"
+cd "$SWM_REPO_ROOT"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 DATASET="${DATASET:-pusht_expert_train.h5}"    # eval_ff is Lance-unsafe, but eval_wm.py is fine on either
 CKPT="${CKPT:-pusht_dinov2_small_psmall/weights_epoch_10.pt}"   # "last" = highest epoch
 
-echo "[repro] PreJEPA pusht-wm-cem | STABLEWM_HOME=$STABLEWM_HOME  ckpt=$CKPT  dataset=$DATASET  seed=42"
+echo "[repro] PreJEPA pusht-wm-cem | host=$SWM_HOST  STABLEWM_HOME=$STABLEWM_HOME  ckpt=$CKPT  dataset=$DATASET  seed=42"
 echo "[repro] NOTE: this eval takes ~2.4 h. Consider 'bf16=true' / 'compile=true' to speed up (changes the result id)."
-python scripts/plan/eval_wm.py \
+"$PY" scripts/plan/eval_wm.py \
     policy="$CKPT" \
     eval.dataset_name="$DATASET"
 

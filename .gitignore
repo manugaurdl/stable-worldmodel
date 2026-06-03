@@ -213,6 +213,10 @@ logs/
 **/__pycache__/**
 **/*.pyc
 !scripts/minerl.sh
+# curated scripts tree is committed despite the blanket *.sh ignore above
+# (host configs in scripts/hosts/ rely on this — see CLAUDE.md Trap #7)
+!scripts/*.sh
+!scripts/**/*.sh
 
 outputs/
 multirun/

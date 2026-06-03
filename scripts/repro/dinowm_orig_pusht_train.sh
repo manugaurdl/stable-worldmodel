@@ -14,19 +14,27 @@
 # Prereq: run dinowm_orig_pusht_dataprep.sh first (features in /dev/shm).
 set -euo pipefail
 
-DINO=/home/manu/stable-worldmodel/dino_wm
-BIN=/nas/manu/miniconda3/envs/dino_wm/bin
-RUN=${RUN:-/nas/manu/stable_worldmodel/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3}
+# --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
+# On a multi-GPU node:  SWM_HOST=trinity-0-3 bash scripts/repro/dinowm_orig_pusht_train.sh
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/env.sh"
 
-NGPU=${NGPU:-8}
-GPUS=${GPUS:-0,1,2,3,4,5,6,7}
+# DINO-WM training runs in the dino_wm conda env (DINOv2/torch/accelerate), NOT the .venv.
+if [[ -z "${DINOENV:-}" ]]; then
+  echo "[train] DINOENV not set for host '$SWM_HOST'. Create a dino_wm conda env (DINOv2 +" >&2
+  echo "        torch + accelerate) and set DINOENV in scripts/hosts/${SWM_HOST}.sh." >&2
+  echo "        See scripts/hosts/manu.sh for the original env." >&2
+  exit 1
+fi
+ACCELERATE="$(dirname "$DINOENV")/accelerate"
+
+RUN=${RUN:-$STABLEWM_HOME/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3}
 EPOCHS=${EPOCHS:-100}
 
-export DATASET_DIR=/nas/manu/stable_worldmodel/datasets
-export SDL_VIDEODRIVER=dummy
+export DATASET_DIR="$STABLEWM_HOME/datasets"
 cd "$DINO"
 
-CUDA_VISIBLE_DEVICES=$GPUS $BIN/accelerate launch --multi_gpu --num_processes "$NGPU" "$DINO/train.py" \
+CUDA_VISIBLE_DEVICES=$GPUS "$ACCELERATE" launch --multi_gpu --num_processes "$NGPU" "$DINO/train.py" \
   --config-name train.yaml env=pusht frameskip=5 num_hist=3 num_pred=1 \
   has_decoder=False model.train_decoder=False training.batch_size=32 training.epochs="$EPOCHS" \
   env.num_workers=8 \

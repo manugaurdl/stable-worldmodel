@@ -6,22 +6,17 @@
 # Authoritative result lives in research/models.md / reproduction-log.md.
 set -euo pipefail
 
-# --- env (override STABLEWM_HOME / CUDA_VISIBLE_DEVICES if your host differs) ---
-export STABLEWM_HOME="${STABLEWM_HOME:-/nas/manu/stable_worldmodel}"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-export SDL_VIDEODRIVER=dummy
-export MUJOCO_GL=egl
-
-# --- repo root + venv ---
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+# --- cross-node env: loads scripts/hosts/$SWM_HOST.sh (default = hostname -s) ---
+# Override the machine with SWM_HOST=<name>; see scripts/env.sh.
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/env.sh"
+cd "$SWM_REPO_ROOT"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 DATASET="${DATASET:-pusht_expert_train.h5}"   # set =pusht_expert_train.lance for the Lance run
 
-echo "[repro] LeWM pusht-wm-cem  | STABLEWM_HOME=$STABLEWM_HOME  dataset=$DATASET  seed=42"
-python scripts/plan/eval_wm.py \
+echo "[repro] LeWM pusht-wm-cem  | host=$SWM_HOST  STABLEWM_HOME=$STABLEWM_HOME  dataset=$DATASET  seed=42"
+"$PY" scripts/plan/eval_wm.py \
     policy=quentinll/lewm-pusht \
     eval.dataset_name="$DATASET"
 

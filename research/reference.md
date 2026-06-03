@@ -6,24 +6,38 @@ live here — see [`models.md`](models.md) / [`reproduction-log.md`](reproductio
 
 ---
 
-## 1. Environment setup (host = `manu`)
+## 1. Environment setup (cross-node — see CLAUDE.md Trap #7)
+
+Host-specific facts (cache root, interpreter, GPUs) live in `scripts/hosts/<host>.sh`,
+loaded by `scripts/env.sh`. **Don't hardcode host paths** — source the loader instead:
 
 ```bash
-# one-time
+# every run script does this; for an ad-hoc shell, do it yourself:
+source scripts/env.sh                 # picks scripts/hosts/$SWM_HOST.sh (default: hostname -s)
+# now exported: STABLEWM_HOME, PY, DINO, NGPU/GPUS, DINOENV, SDL_VIDEODRIVER, MUJOCO_GL
+# pick a machine explicitly:  SWM_HOST=trinity-0-3 source scripts/env.sh
+# pin a single GPU for evals:  export CUDA_VISIBLE_DEVICES=0
+```
+
+Per-host configs currently defined:
+
+| host | `STABLEWM_HOME` | interpreter (`PY`) | GPUs | DINO-WM conda env (`DINOENV`) |
+|---|---|---|---|---|
+| `trinity` (CMU login) | `/data3/mgaur/stable_worldmodel` (NFS) | repo `.venv` (uv py3.10) | none — ssh to a node | `/home/mgaur/miniconda3/envs/dino_wm` (py3.9) |
+| `trinity-0-3` (CMU node) | ↑ inherited | ↑ inherited | 8× RTX 6000 Ada 48 GB | ↑ inherited (shared NFS home) |
+| `manu` (original) | `/nas/manu/stable_worldmodel` | repo `.venv` | 8× RTX 49 GB | `/nas/manu/miniconda3/envs/dino_wm` |
+
+One-time per-host venv build:
+
+```bash
 uv venv --python=3.10 && source .venv/bin/activate
 uv sync --extra all --group dev
 uv pip install scikit-learn datasets                 # missing from every extra
 uv pip install --reinstall "pygame==2.6.1"           # stock build crashes on import (missing FRect)
-
-# every run (export before any train/eval/CLI command)
-export STABLEWM_HOME=/nas/manu/stable_worldmodel     # home is ~99% full; /nas is NFS
-export CUDA_VISIBLE_DEVICES=0                         # 8× RTX-class GPUs, 49 GB each
-export SDL_VIDEODRIVER=dummy                          # headless pygame rendering
-export MUJOCO_GL=egl                                  # eval_wm.py also sets this internally
 ```
 
 `STABLEWM_HOME` is the cache root (`get_cache_dir`); defaults to `~/.stable_worldmodel`
-if unset. **Always set it** — datasets + checkpoints are large.
+if unset. **Always set it** (via `env.sh`) — datasets + checkpoints are large.
 
 ## 2. Storage layout — `$STABLEWM_HOME/`
 
@@ -97,12 +111,13 @@ python scripts/plan/eval_wm.py policy=<model-id> eval.dataset_name=pusht_expert_
 
 The **original** DINO-WM repo's own evaluator: `dino_wm/plan.py` + `dino_wm/conf/plan_pusht.yaml`.
 Used only for models trained with the original code (e.g. `dinowm_orig_pusht_f5h3`), which
-are not `load_pretrained`-compatible. Runs in the `dino_wm` conda env (py3.10), not the swm venv.
+are not `load_pretrained`-compatible. Runs in the `dino_wm` conda env (py3.9), not the swm venv.
 
 ```bash
-export DATASET_DIR=/nas/manu/stable_worldmodel/datasets SDL_VIDEODRIVER=dummy MUJOCO_GL=egl WANDB_MODE=disabled
-cd dino_wm && CUDA_VISIBLE_DEVICES=<gpu> python plan.py --config-name plan_pusht.yaml \
-    ckpt_base_path=/nas/manu/stable_worldmodel/dino_wm_runs \
+source scripts/env.sh                  # exports STABLEWM_HOME, DINO, DINOENV (needs a host with DINOENV set)
+export DATASET_DIR="$STABLEWM_HOME/datasets" WANDB_MODE=disabled
+cd "$DINO" && CUDA_VISIBLE_DEVICES=<gpu> "$DINOENV" plan.py --config-name plan_pusht.yaml \
+    ckpt_base_path="$STABLEWM_HOME/dino_wm_runs" \
     model_name=dinowm_orig_pusht_f5h3 model_epoch=<N> n_evals=50 n_plot_samples=0
 # wrapper: scripts/repro/dinowm_orig_pusht_plan_eval.sh   (EPOCH=<N> NEVALS=50 GPU=<g>)
 ```

@@ -101,13 +101,52 @@ the wrong value, the correct value, the root cause (`file:line`), and the fix.
   `eval_wm.py` was fixed away from (commit `7057f0f`). It will KeyError on Lance
   datasets. Use h5 with `eval_ff.py`, or port the `get_col_data` fix.
 
+- **Trap #7 — host-specific paths live in ONE place: `scripts/hosts/<host>.sh`.** This
+  repo was authored on host `manu` (`/home/manu`, `/nas/manu`, conda) and is now also run
+  on the CMU `trinity` nodes (`/home/mgaur`, `/data3/mgaur`, `.venv`). Every run script
+  **`source`s `scripts/env.sh`**, which loads the right per-host config (selected by
+  `SWM_HOST`, default `hostname -s`) and exports `STABLEWM_HOME`, `PY`, `DINO`,
+  `NGPU`/`GPUS`, `DINOENV`, `SDL_VIDEODRIVER`, `MUJOCO_GL`. **Adding a machine = add one
+  `scripts/hosts/<name>.sh`** (CMU compute nodes just `source` `trinity.sh` and override
+  GPUs — same NFS fs). If you find a `/home/manu`, `/nas/manu`, or any absolute
+  home/nas/conda path **outside `scripts/hosts/`**, that's the bug — move it into the host
+  config, don't paper over it with a one-off env override. `env.sh` fails loud if the
+  cache root or interpreter is missing, so a wrong-host selection stops immediately.
+
+- **Trap #8 — DINO-WM's DINOv2 hub load is unpinned + the `dino_wm` conda env is Python
+  3.9.** `dino_wm/models/dino.py` does `torch.hub.load("facebookresearch/dinov2", …)`
+  with **no ref**, so each machine pulls whatever DINOv2 `main` is current — both a
+  cross-node nondeterminism risk *and* a hard break: the latest DINOv2
+  `layers/{block,attention}.py` use PEP 604 `X | None` annotations that raise
+  `TypeError: unsupported operand type(s) for |` under Python 3.9 (the env built from
+  `dino_wm/environment.yaml`). Fix lives **in our code**: `_enable_py39_dinov2()` in
+  `dino.py` injects `from __future__ import annotations` into dinov2 modules at import
+  (in memory — the torch-hub cache is never edited; no-op on ≥3.10; features unchanged).
+  Do **not** patch the `~/.cache/torch/hub` copy in place (out-of-repo dependency).
+  *Still TODO:* pin the hub commit for true reproducibility. The `dino_wm` env lives in
+  NFS home (`/home/mgaur/miniconda3/envs/dino_wm`, built 2026-06-03) so it is shared
+  across CMU nodes; `DINOENV` in `scripts/hosts/trinity.sh` points at it.
+
+- **Trap #9 — `dataprep.sh` precompute hid shard failures (fixed).** The feature-precompute
+  loop backgrounded 8 shards then called bare `wait`, which returns 0 regardless of child
+  exit codes — so a total precompute failure still reported **exit 0 with 0 features**
+  written. Fixed to `wait "$pid"` per shard (fail loud) + assert final counts
+  (`16816`/`1869`). If you copy this fan-out pattern elsewhere, wait per-PID.
+
 ---
 
 ## Conventions
 
-- **Env setup** for any run (this host = `manu`): `STABLEWM_HOME=/nas/manu/stable_worldmodel`
-  (home is ~99% full; `/nas` is NFS), `CUDA_VISIBLE_DEVICES=0`, `SDL_VIDEODRIVER=dummy`,
-  `MUJOCO_GL=egl`. Full setup in `research/reference.md`.
+- **Env setup is host-specific — never hardcode it.** `source scripts/env.sh` at the top
+  of every run script (after `set -euo pipefail`); it resolves the repo root, loads
+  `scripts/hosts/<host>.sh`, and exports `STABLEWM_HOME`, `PY` (interpreter), `DINO`,
+  `NGPU`/`GPUS`, `SDL_VIDEODRIVER=dummy`, `MUJOCO_GL=egl`. Pick the machine with
+  `SWM_HOST=<name>` (default `hostname -s`), e.g.
+  `SWM_HOST=trinity-0-3 bash scripts/repro/<x>.sh`. CMU site:
+  `STABLEWM_HOME=/data3/mgaur/stable_worldmodel`, `.venv` interpreter, GPUs on `trinity-0-*`
+  compute nodes (login `trinity` has none). Original `manu` host: `/nas/manu/...` + conda.
+  See Trap #7 and `research/reference.md`. (Use `CUDA_VISIBLE_DEVICES` per-run to pin a
+  single GPU for evals.)
 - **Naming:** model IDs as above; eval IDs in `reference.md`; one repro script per
   result/table in `scripts/repro/`.
 - Keep `research/` docs in their lanes (orientation / reference / source-of-truth /

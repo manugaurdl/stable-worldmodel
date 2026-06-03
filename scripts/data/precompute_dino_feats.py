@@ -17,18 +17,24 @@ Feature path EXACTLY mirrors VWorldModel.encode_obs:
 Run with the dino_wm conda env. Shard across GPUs via --num-shards/--shard + CUDA_VISIBLE_DEVICES.
 """
 import os, sys, time, pickle, argparse
+from pathlib import Path
 import numpy as np
 import torch
 
-sys.path.insert(0, "/home/manu/stable-worldmodel/dino_wm")
+# Cross-node: the vendored DINO-WM code is in-repo (scripts/data/.. -> repo/dino_wm).
+# Override with the DINO env var (set by scripts/env.sh); never hardcode a host path.
+_dino = os.environ.get("DINO") or str(Path(__file__).resolve().parents[2] / "dino_wm")
+sys.path.insert(0, _dino)
 from torchvision import transforms as T
 from datasets.img_transforms import default_transform
 from models.dino import DinoV2Encoder
 
 
 def parse():
+    # Cross-node: --dst defaults under $STABLEWM_HOME/datasets (set by scripts/env.sh).
+    _datasets = os.path.join(os.environ.get("STABLEWM_HOME", ""), "datasets")
     p = argparse.ArgumentParser()
-    p.add_argument("--dst", default="/nas/manu/stable_worldmodel/datasets/pusht_noise")
+    p.add_argument("--dst", default=os.path.join(_datasets, "pusht_noise"))
     p.add_argument("--split", choices=["train", "val"], required=True)
     p.add_argument("--num-shards", type=int, default=1)
     p.add_argument("--shard", type=int, default=0)

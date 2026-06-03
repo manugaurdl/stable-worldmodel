@@ -35,9 +35,12 @@ ACTION_SCALE = 100.0
 
 
 def parse_args():
+    # Cross-node: paths default under $STABLEWM_HOME/datasets (set by scripts/env.sh).
+    # Override with --src/--dst. Hardcode no absolute /home or /nas paths here.
+    _datasets = os.path.join(os.environ.get("STABLEWM_HOME", ""), "datasets")
     p = argparse.ArgumentParser()
-    p.add_argument("--src", default="/nas/manu/stable_worldmodel/datasets/pusht_expert_train.h5")
-    p.add_argument("--dst", default="/nas/manu/stable_worldmodel/datasets/pusht_noise")
+    p.add_argument("--src", default=os.path.join(_datasets, "pusht_expert_train.h5"))
+    p.add_argument("--dst", default=os.path.join(_datasets, "pusht_noise"))
     p.add_argument("--split", type=float, default=0.9)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--workers", type=int, default=8)
