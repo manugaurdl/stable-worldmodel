@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Train DINO-WM (ORIGINAL gaoyuezhou/dino_wm code) on our PushT expert data.
-# Model id: dinowm_orig_pusht_f5h3   (wandb: manugaur/stable-wm, run name == model_name)
+# Model id: dinowm_orig_pusht_f5h3_<timestamp>  (wandb: manugaur/stable-wm; run name ==
+#   model_name == run-dir basename. New run each launch; pass RUN=<dir> to resume — see below.)
 #
 # Faithful recipe: frozen DINOv2 ViT-S/14, ViT causal predictor (depth6/heads16/mlp2048),
 # global batch 32, predictor lr 5e-4, frameskip 5, num_hist 3, num_pred 1, 100 epochs.
@@ -28,7 +29,12 @@ if [[ -z "${DINOENV:-}" ]]; then
 fi
 ACCELERATE="$(dirname "$DINOENV")/accelerate"
 
-RUN=${RUN:-$STABLEWM_HOME/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3}
+# Default = a NEW run every launch (unique timestamped dir -> new wandb id, train from
+# scratch). To RESUME an existing run instead, pass its dir:
+#   RUN=$STABLEWM_HOME/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3_20260603_143000 \
+#     bash scripts/repro/dinowm_orig_pusht_train.sh
+# (train.py reuses that dir's hydra.yaml wandb_run_id + checkpoints/model_latest.pth.)
+RUN=${RUN:-$STABLEWM_HOME/dino_wm_runs/outputs/dinowm_orig_pusht_f5h3_$(date +%Y%m%d_%H%M%S)}
 EPOCHS=${EPOCHS:-100}
 
 export DATASET_DIR="$STABLEWM_HOME/datasets"
@@ -36,7 +42,7 @@ cd "$DINO"
 
 CUDA_VISIBLE_DEVICES=$GPUS "$ACCELERATE" launch --multi_gpu --num_processes "$NGPU" "$DINO/train.py" \
   --config-name train.yaml env=pusht frameskip=5 num_hist=3 num_pred=1 \
-  has_decoder=False model.train_decoder=False training.batch_size=32 training.epochs="$EPOCHS" \
+  has_decoder=False model.train_decoder=False training.batch_size=64 training.epochs="$EPOCHS" \
   env.num_workers=8 \
   env.dataset._target_=datasets.pusht_dset.load_pusht_feat_slice_train_val \
   hydra.run.dir="$RUN"
