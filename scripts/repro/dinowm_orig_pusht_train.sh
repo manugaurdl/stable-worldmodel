@@ -29,7 +29,10 @@ if [[ -z "${DINOENV:-}" ]]; then
   echo "        See scripts/hosts/manu.sh for the original env." >&2
   exit 1
 fi
-ACCELERATE="$(dirname "$DINOENV")/accelerate"
+# Launch accelerate as a module (NOT the bin/accelerate console script): on hosts where
+# the dino_wm env was copied from another box (e.g. lambda-hyperplane, copied from /nas),
+# the console script's shebang points at the original prefix's python and dies with
+# "bad interpreter". `$DINOENV -m accelerate.commands.launch` is shebang-independent.
 
 # Default = a NEW run every launch (unique timestamped dir -> new wandb id, train from
 # scratch). To RESUME an existing run instead, pass its dir:
@@ -44,7 +47,7 @@ PRECOMP=${PRECOMP:-1}   # 1 -> precomputed feats; 0 -> encode DINOv2 online
 export DATASET_DIR="$STABLEWM_HOME/datasets"
 cd "$DINO"
 
-CUDA_VISIBLE_DEVICES=$GPUS "$ACCELERATE" launch --multi_gpu --num_processes "$NGPU" "$DINO/train.py" \
+CUDA_VISIBLE_DEVICES=$GPUS "$DINOENV" -m accelerate.commands.launch --multi_gpu --num_processes "$NGPU" "$DINO/train.py" \
   --config-name train.yaml env=pusht frameskip=5 num_hist=3 num_pred=1 \
   has_decoder=False model.train_decoder=False training.batch_size=64 training.epochs="$EPOCHS" \
   env.num_workers=8 \
